@@ -78,6 +78,7 @@ import { TaskLog } from '../../../../core/log';
 import { isTouchEventInstance } from '../../../../util/is-touch-event.util';
 import { TaskFocusService } from '../../task-focus.service';
 import { DEFAULT_GLOBAL_CONFIG } from 'src/app/features/config/default-global-config.const';
+import { TaskExportService } from '../../task-export.service';
 
 @Component({
   selector: 'task-context-menu-inner',
@@ -117,6 +118,7 @@ export class TaskContextMenuInnerComponent implements AfterViewInit {
   private readonly _workContextService = inject(WorkContextService);
   private readonly _taskFocusService = inject(TaskFocusService);
   private readonly _dateService = inject(DateService);
+  private readonly _taskExportService = inject(TaskExportService);
 
   protected readonly IS_TOUCH_PRIMARY = IS_TOUCH_PRIMARY;
   protected readonly T = T;
@@ -425,6 +427,16 @@ export class TaskContextMenuInnerComponent implements AfterViewInit {
         );
       }
     }
+  }
+
+  async exportTask(): Promise<void> {
+    const taskWithSubTasks = this.task.parentId ? null : await this._getTaskWithSubtasks();
+    await this._taskExportService.exportTask(
+      this.task,
+      taskWithSubTasks?.subTasks || [],
+      false,
+    );
+    this.onClose();
   }
 
   moveToTop(): void {

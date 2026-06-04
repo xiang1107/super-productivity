@@ -255,6 +255,16 @@
     <span class="key-i">{{ kb.taskAddAttachment }}</span>
   </button>
 
+  <button
+    (click)="exportTask()"
+    mat-menu-item
+  >
+    <span class="menuItemLeft">
+      <mat-icon>download</mat-icon>
+      {{ T.F.TASK.CMP.EXPORT_WITH_NOTES | translate }}
+    </span>
+  </button>
+
   <!--TODO maybe handle dynamically -->
   @if (task.issueId && task.issueType !== ICAL_TYPE) {
     <a

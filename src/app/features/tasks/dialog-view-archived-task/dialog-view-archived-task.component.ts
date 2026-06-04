@@ -28,6 +28,7 @@ import { from } from 'rxjs';
 import { first } from 'rxjs/operators';
 import { TaskArchiveService } from '../../archive/task-archive.service';
 import { Log } from '../../../core/log';
+import { TaskExportService } from '../task-export.service';
 
 export interface ViewArchivedTaskData {
   task: Task;
@@ -60,6 +61,7 @@ export class DialogViewArchivedTaskComponent {
   private _dateTimeFormatService = inject(DateTimeFormatService);
   private _issueService = inject(IssueService);
   private _taskArchiveService = inject(TaskArchiveService);
+  private _taskExportService = inject(TaskExportService);
   readonly data = inject<ViewArchivedTaskData>(MAT_DIALOG_DATA);
 
   T: typeof T = T;
@@ -129,5 +131,16 @@ export class DialogViewArchivedTaskComponent {
         targetDate: this.task.dueDay || getDbDateStr(new Date(this.task.created)),
       },
     });
+  }
+
+  async exportTask(): Promise<void> {
+    let subTasks = this.subTasks();
+    if (!subTasks.length && this.task.subTaskIds?.length) {
+      const subTaskMap = await this._taskArchiveService.getByIdBatch(this.task.subTaskIds);
+      subTasks = this.task.subTaskIds
+        .map((id) => subTaskMap.get(id))
+        .filter((task): task is Task => !!task);
+    }
+    await this._taskExportService.exportTask(this.task, subTasks, true);
   }
 }

@@ -128,6 +128,13 @@
 <mat-dialog-actions align="end">
   <button
     mat-button
+    type="button"
+    (click)="exportTask()"
+  >
+    {{ T.F.TASK.CMP.EXPORT_WITH_NOTES | translate }}
+  </button>
+  <button
+    mat-button
     mat-dialog-close
   >
     {{ T.G.CLOSE | translate }}

@@ -1452,6 +1452,7 @@
         "DUPLICATE": "Duplicate",
         "EDIT_DEADLINE": "Edit deadline",
         "EDIT_SCHEDULED": "Reschedule",
+        "EXPORT_WITH_NOTES": "Export task with notes",
         "FOCUS_SESSION": "Start focus session",
         "MARK_DONE": "Mark as completed",
         "MOVE_TO_BACKLOG": "Move to backlog",
