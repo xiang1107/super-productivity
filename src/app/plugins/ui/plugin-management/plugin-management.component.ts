@@ -5,8 +5,6 @@ import {
   inject,
   signal,
 } from '@angular/core';
-import { toSignal } from '@angular/core/rxjs-interop';
-import { HttpClient } from '@angular/common/http';
 import { PluginService } from '../../plugin.service';
 import { PluginInstance } from '../../plugin-api.model';
 import { PluginMetaPersistenceService } from '../../plugin-meta-persistence.service';
@@ -34,19 +32,22 @@ import { PluginIconComponent } from '../plugin-icon/plugin-icon.component';
 import { PluginConfigDialogComponent } from '../plugin-config-dialog/plugin-config-dialog.component';
 import { IS_ELECTRON } from '../../../app.constants';
 import { PluginLog } from '../../../core/log';
-import { SnackService } from '../../../core/snack/snack.service';
-import { catchError, of } from 'rxjs';
+import { PluginBridgeService } from '../../plugin-bridge.service';
 import { CollapsibleComponent } from '../../../ui/collapsible/collapsible.component';
 import { LanguageCode } from '../../../core/locale.constants';
 import { GlobalConfigService } from '../../../features/config/global-config.service';
 import { confirmDialog } from '../../../util/native-dialogs';
 import { Store } from '@ngrx/store';
 import { selectAll as selectAllIssueProviders } from '../../../features/issue/store/issue-provider.selectors';
+import COMMUNITY_PLUGINS_DATA from '../../../../assets/community-plugins.json';
 
 interface CommunityPlugin {
   name: string;
   shortDescription: string;
   url: string;
+  author: string;
+  authorUrl?: string;
+  stars?: number;
 }
 
 @Component({
@@ -82,9 +83,8 @@ export class PluginManagementComponent {
   private readonly _translateService = inject(TranslateService);
   private readonly _globalConfigService = inject(GlobalConfigService);
   private readonly _dialog = inject(MatDialog);
-  private readonly _http = inject(HttpClient);
-  private readonly _snackService = inject(SnackService);
   private readonly _store = inject(Store);
+  private readonly _pluginBridge = inject(PluginBridgeService);
   private readonly _allIssueProviders = this._store.selectSignal(selectAllIssueProviders);
 
   // Language code to human-readable name mapping
@@ -120,18 +120,10 @@ export class PluginManagementComponent {
   } as const;
   /* eslint-enable @typescript-eslint/naming-convention */
 
-  readonly communityPlugins = toSignal(
-    this._http.get<CommunityPlugin[]>('assets/community-plugins.json').pipe(
-      catchError((err) => {
-        PluginLog.err('Failed to load community plugins:', err);
-        this._snackService.open({
-          type: 'ERROR',
-          msg: T.PLUGINS.FAILED_TO_LOAD_COMMUNITY_PLUGINS,
-        });
-        return of([] as CommunityPlugin[]);
-      }),
+  readonly communityPlugins = signal<CommunityPlugin[]>(
+    [...(COMMUNITY_PLUGINS_DATA as CommunityPlugin[])].sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
     ),
-    { initialValue: [] },
   );
 
   T: typeof T = T;
@@ -425,6 +417,14 @@ export class PluginManagementComponent {
     }
 
     return parts.join(' / ');
+  }
+
+  hasConfigHandler(plugin: PluginInstance): boolean {
+    return this._pluginBridge.hasConfigHandler(plugin.manifest.id);
+  }
+
+  openPluginConfig(plugin: PluginInstance): void {
+    this._pluginBridge.invokeConfigHandler(plugin.manifest.id);
   }
 
   async openConfigDialog(plugin: PluginInstance): Promise<void> {

@@ -1,4 +1,5 @@
-import { test, expect, type Page, type Download } from '@playwright/test';
+import { test, expect } from '../../fixtures/test.fixture';
+import { type Page, type Download } from '@playwright/test';
 import { ImportPage } from '../../pages/import.page';
 import * as fs from 'fs';
 
@@ -21,26 +22,9 @@ import * as fs from 'fs';
 
 // Selectors
 const TASK_SEL = 'task';
-const TASK_DONE_BTN = '.task-done-btn';
+const TASK_DONE_BTN = 'done-toggle';
 const FINISH_DAY_BTN = '.e2e-finish-day';
 const SAVE_AND_GO_HOME_BTN = 'button[mat-flat-button][color="primary"]:last-of-type';
-
-/**
- * Helper to dismiss welcome tour dialog if present
- */
-const dismissWelcomeDialog = async (page: Page): Promise<void> => {
-  try {
-    // Try multiple selectors for the close button
-    const closeBtn = page.locator('button:has-text("No thanks")').first();
-    const isVisible = await closeBtn.isVisible().catch(() => false);
-    if (isVisible) {
-      await closeBtn.click();
-      await page.waitForTimeout(500);
-    }
-  } catch {
-    // Dialog not present, ignore
-  }
-};
 
 /**
  * Helper to trigger and capture download
@@ -69,49 +53,50 @@ const readDownloadedFile = async (download: Download): Promise<string> => {
 };
 
 /**
- * Helper to mark all visible tasks as done
- * Uses hover → wait for done button → click pattern from task-crud tests
+ * Helper to mark all tasks as done.
+ *
+ * Clicks the done-toggle of the first still-undone row until none remain. The
+ * done-toggle is always rendered at the e2e viewport width (it is only
+ * opacity-hidden inside <352px containers), so we click it directly rather than
+ * hovering `.first-line` first: that hover intermittently timed out for 15s when
+ * the targeted row was mid mark-done animation or a collapsing subtask (the
+ * cause of this spec's CI flakiness).
  */
 const markAllTasksDone = async (page: Page): Promise<void> => {
-  // Wait for tasks to be visible
   await page.waitForSelector(TASK_SEL, { state: 'visible', timeout: 10000 });
 
-  let attempts = 0;
-  const maxAttempts = 6;
+  // Only target visible rows: a subtask that collapses under a freshly-done
+  // parent cannot be interacted with and must never be selected.
+  const undoneVisible = page.locator(`${TASK_SEL}:not(.isDone):visible`);
 
-  while (attempts < maxAttempts) {
-    // Check for and dismiss welcome dialog if it appeared
-    await dismissWelcomeDialog(page);
+  // The work-view list animates and reorders rows as tasks are marked done, so
+  // a normal click can wait the full 15s actionTimeout for a row to become
+  // "stable" — the source of this spec's CI flakiness. Instead keep
+  // force-clicking the first undone row's own done-toggle (`.first()`: a parent
+  // renders its toggle before any nested subtask toggle) until none remain. A
+  // missed click — the row moved mid-animation — is simply retried on the next
+  // poll, and finishing the last subtask auto-completes its parent so the count
+  // can drop by more than one.
+  await expect
+    .poll(
+      async () => {
+        const remaining = await undoneVisible.count();
+        if (remaining > 0) {
+          await undoneVisible
+            .first()
+            .locator(TASK_DONE_BTN)
+            .first()
+            .click({ force: true })
+            .catch(() => {});
+        }
+        return remaining;
+      },
+      { timeout: 30000, intervals: [300] },
+    )
+    .toBe(0);
 
-    const undoneLocator = page.locator('task:not(.isDone)');
-    const undoneCount = await undoneLocator.count();
-    console.log(
-      `[markAllTasksDone] Attempt ${attempts + 1}: ${undoneCount} undone tasks`,
-    );
-
-    if (undoneCount === 0) break;
-
-    // Get the first undone task using Playwright locator
-    const firstUndone = undoneLocator.first();
-    // Must hover over .first-line to trigger hover controls
-    // Use .first() because parent tasks contain nested subtask .first-lines
-    const firstLine = firstUndone.locator('.first-line').first();
-    await firstLine.hover();
-
-    // Wait for the done button to become visible after hover
-    // Use .first() for same reason - parent has nested subtask done buttons
-    const doneBtn = firstUndone.locator(TASK_DONE_BTN).first();
-    await doneBtn.waitFor({ state: 'visible', timeout: 2000 });
-
-    // Click the done button
-    await doneBtn.click();
-    await page.waitForTimeout(500);
-
-    attempts++;
-  }
-
-  const finalCount = await page.locator('task:not(.isDone)').count();
-  console.log(`[markAllTasksDone] Finished: ${finalCount} undone tasks remain`);
+  // No row — visible or collapsed — may remain undone before finish-day.
+  await expect(page.locator(`${TASK_SEL}:not(.isDone)`)).toHaveCount(0);
 };
 
 /**
@@ -174,16 +159,12 @@ test.describe('@legacy-archive Legacy Archive Subtasks via Finish Day', () => {
     await expect(page).toHaveURL(/.*tag.*TODAY.*tasks/);
     console.log('[Legacy Archive Test] Import completed');
 
-    // Dismiss welcome dialog if present
-    await dismissWelcomeDialog(page);
-
     // Step 2: Navigate to INBOX project to see tasks
     // Note: We navigate to INBOX project because the backup has dueDay in the past,
     // and TODAY tag only shows tasks with dueDay === today (virtual tag pattern)
     console.log('[Legacy Archive Test] Step 2: Navigating to INBOX project...');
     await page.goto('/#/project/INBOX_PROJECT/tasks');
     await page.waitForLoadState('networkidle');
-    await dismissWelcomeDialog(page);
     await page.waitForTimeout(1000);
 
     // Verify tasks are visible (parent tasks - subtasks are nested)
@@ -199,19 +180,10 @@ test.describe('@legacy-archive Legacy Archive Subtasks via Finish Day', () => {
     console.log('[Legacy Archive Test] All tasks marked as done');
 
     // Step 4: Navigate to TODAY tag to access Finish Day button
-    // Note: Finish Day button is only visible on TODAY tag view when not in planning mode
     console.log('[Legacy Archive Test] Step 4: Navigating to TODAY for Finish Day...');
     await page.goto('/#/tag/TODAY/tasks');
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(500);
-
-    // Exit planning mode if we're in it (planning mode hides the Finish Day button)
-    const readyToWorkBtn = page.locator('button:has-text("Ready to work!")');
-    if (await readyToWorkBtn.isVisible().catch(() => false)) {
-      console.log('[Legacy Archive Test] Exiting planning mode...');
-      await readyToWorkBtn.click();
-      await page.waitForTimeout(500);
-    }
 
     // Step 5: Finish day to archive tasks
     console.log('[Legacy Archive Test] Step 5: Finishing day...');
@@ -282,13 +254,11 @@ test.describe('@legacy-archive Legacy Archive Subtasks via Finish Day', () => {
     const backupPath = ImportPage.getFixturePath('legacy-archive-subtasks-backup.json');
     await importPage.importBackupFile(backupPath);
     await expect(page).toHaveURL(/.*tag.*TODAY.*tasks/);
-    await dismissWelcomeDialog(page);
 
     // Navigate to INBOX project and mark all done
     // Note: We navigate to INBOX project because the backup has dueDay in the past
     await page.goto('/#/project/INBOX_PROJECT/tasks');
     await page.waitForLoadState('networkidle');
-    await dismissWelcomeDialog(page);
     await page.waitForTimeout(1000);
     await markAllTasksDone(page);
 
@@ -296,13 +266,6 @@ test.describe('@legacy-archive Legacy Archive Subtasks via Finish Day', () => {
     await page.goto('/#/tag/TODAY/tasks');
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(500);
-
-    // Exit planning mode if we're in it (planning mode hides the Finish Day button)
-    const readyToWorkBtn = page.locator('button:has-text("Ready to work!")');
-    if (await readyToWorkBtn.isVisible().catch(() => false)) {
-      await readyToWorkBtn.click();
-      await page.waitForTimeout(500);
-    }
 
     // Finish day
     await finishDay(page);
@@ -344,12 +307,10 @@ test.describe('@legacy-archive Legacy Archive Subtasks via Finish Day', () => {
     const backupPath = ImportPage.getFixturePath('legacy-archive-subtasks-backup.json');
     await importPage.importBackupFile(backupPath);
     await expect(page).toHaveURL(/.*tag.*TODAY.*tasks/);
-    await dismissWelcomeDialog(page);
 
     // Navigate to INBOX project because backup has dueDay in the past
     await page.goto('/#/project/INBOX_PROJECT/tasks');
     await page.waitForLoadState('networkidle');
-    await dismissWelcomeDialog(page);
     await page.waitForTimeout(1000);
     await markAllTasksDone(page);
 
@@ -358,12 +319,6 @@ test.describe('@legacy-archive Legacy Archive Subtasks via Finish Day', () => {
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(500);
 
-    // Exit planning mode if we're in it (planning mode hides the Finish Day button)
-    const readyToWorkBtn = page.locator('button:has-text("Ready to work!")');
-    if (await readyToWorkBtn.isVisible().catch(() => false)) {
-      await readyToWorkBtn.click();
-      await page.waitForTimeout(500);
-    }
     await finishDay(page);
 
     // Export - wait for IndexedDB writes

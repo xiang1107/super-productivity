@@ -39,7 +39,10 @@ import { Project } from '../../project/project.model';
 import { Router } from '@angular/router';
 import { NavigateToTaskService } from '../../../core-ui/navigate-to-task/navigate-to-task.service';
 import { LayoutService } from '../../../core-ui/layout/layout.service';
+import { LS } from '../../../core/persistence/storage-keys.const';
 import { skipWhileApplyingRemoteOps } from '../../../util/skip-during-sync.operator';
+import { DateService } from '../../../core/date/date.service';
+import { isBlankTask } from '../util/is-blank-task';
 
 @Injectable()
 export class TaskUiEffects {
@@ -54,11 +57,14 @@ export class TaskUiEffects {
   private _workContextService = inject(WorkContextService);
   private _navigateToTaskService = inject(NavigateToTaskService);
   private _layoutService = inject(LayoutService);
+  private _dateService = inject(DateService);
 
   taskCreatedSnack$ = createEffect(
     () =>
       this._actions$.pipe(
         ofType(TaskSharedActions.addTask),
+        // Skip the created snack for accidentally created tasks with no title
+        filter(({ task }) => !!task.title.trim()),
         withLatestFrom(this._workContextService.mainListTaskIds$),
         switchMap(([{ task }, activeContextTaskIds]) => {
           if (task.projectId) {
@@ -81,25 +87,27 @@ export class TaskUiEffects {
         tap(({ project, task, activeContextTaskIds }) => {
           const isTaskVisibleOnCurrentPage = activeContextTaskIds.includes(task.id);
 
+          if (
+            isTaskVisibleOnCurrentPage ||
+            !localStorage.getItem(LS.ONBOARDING_HINTS_DONE)
+          ) {
+            return;
+          }
+
           this._snackService.open({
             type: 'SUCCESS',
             translateParams: {
               taskTitle: truncate(task.title),
               projectTitle: project ? truncate(project.title) : '',
             },
-            msg:
-              task.projectId && !isTaskVisibleOnCurrentPage
-                ? T.F.TASK.S.CREATED_FOR_PROJECT
-                : T.F.TASK.S.TASK_CREATED,
+            msg: task.projectId
+              ? T.F.TASK.S.CREATED_FOR_PROJECT
+              : T.F.TASK.S.TASK_CREATED,
             ico: 'add',
             actionStr: T.F.TASK.S.GO_TO_TASK,
             actionFn: () => {
               this._layoutService.hideAddTaskBar();
-              if (isTaskVisibleOnCurrentPage) {
-                this._taskService.setSelectedId(task.id);
-              } else {
-                this._navigateToTaskService.navigate(task.id, false);
-              }
+              this._navigateToTaskService.navigate(task.id, false);
             },
           });
         }),
@@ -111,6 +119,8 @@ export class TaskUiEffects {
     () =>
       this._actions$.pipe(
         ofType(TaskSharedActions.deleteTask),
+        // Skip the undo snack for accidentally created blank tasks
+        filter(({ task }) => !isBlankTask(task)),
         tap(({ task }) => {
           this._snackService.open({
             translateParams: {
@@ -299,6 +309,9 @@ export class TaskUiEffects {
                         this._store$.dispatch(
                           TaskSharedActions.planTasksForToday({
                             taskIds: currentTasks.map((t) => t.id),
+                            today: this._dateService.todayStr(),
+                            startOfNextDayDiffMs:
+                              this._dateService.getStartOfNextDayDiffMs(),
                           }),
                         );
                       }

@@ -1,12 +1,14 @@
 import { environment } from '../../../environments/environment';
+import {
+  HAS_OFFICIAL_ONEDRIVE_CLIENT_ID,
+  OFFICIAL_ONEDRIVE_CLIENT_ID,
+} from '../../imex/sync/onedrive-auth-mode.const';
 
-import { getDefaultVoice } from '../voice-reminder/getAvailableVoices';
 import { TaskReminderOptionId } from '../tasks/task.model';
 import { GlobalConfigState } from './global-config.model';
+import { INBOX_PROJECT } from '../project/project.const';
 
 const minute = 60 * 1000;
-const defaultVoice = getDefaultVoice();
-
 const defaultTaskNotesTemplate = `**How can I best achieve it now?**
 
 **What do I want?**
@@ -30,6 +32,7 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalConfigState = {
     isDonatePageEnabled: true,
     isEnableUserProfiles: false,
     isHabitsEnabled: true,
+    isFinishDayEnabled: true,
   },
   localization: {
     lng: undefined,
@@ -41,7 +44,7 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalConfigState = {
     isAutoAddWorkedOnToToday: true,
     isAutoMarkParentAsDone: false,
     isTrayShowCurrent: true,
-    defaultProjectId: null,
+    defaultProjectId: INBOX_PROJECT.id,
     isMarkdownFormattingInNotesEnabled: true,
     notesTemplate: defaultTaskNotesTemplate,
   },
@@ -49,12 +52,19 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalConfigState = {
     isConfirmBeforeExit: false,
     isConfirmBeforeExitWithoutFinishDay: true,
     isMinimizeToTray: false,
+    isLocalRestApiEnabled: false,
     isTrayShowCurrentCountdown: true,
     startOfNextDay: 0,
+    startOfNextDayTime: '00:00',
     isDisableAnimations: false,
+    isVerticalActionBar: false,
     isDisableCelebration: false,
+    // NOTE: isUseCustomWindowTitleBar is intentionally NOT defaulted here. A
+    // persisted default would be pushed to Electron on every launch and override
+    // a legacy `isUseObsidianStyleHeader` choice. Its effective default is resolved
+    // at read time (main-window.ts / global-theme.service.ts: `?? !IS_GNOME_DESKTOP`)
+    // and the settings checkbox is seeded display-only in misc-settings-form (#7891).
     isShowProductivityTipLonger: false,
-    isOverlayIndicatorEnabled: false,
     customTheme: 'default',
     defaultStartPage: 0,
   },
@@ -90,14 +100,21 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalConfigState = {
     interval: 5 * minute,
     volume: 75,
     text: 'Your current task is: ${currentTaskTitle}',
-    voice: defaultVoice,
+    voice: '',
   },
   focusMode: {
     isSkipPreparation: false,
     isPlayTick: false,
-    isPauseTrackingDuringBreak: false,
-    isSyncSessionWithTracking: false,
-    isStartInBackground: false,
+    focusModeSound: 'off',
+    isPauseTrackingDuringBreak: true,
+    autoStartFocusOnPlay: false,
+    isManualBreakStart: false,
+  },
+  flowtime: {
+    isBreakEnabled: false,
+    breakMode: 'ratio',
+    breakPercentage: 20,
+    breakRules: [],
   },
   clipboardImages: {
     imagePath: null,
@@ -115,11 +132,12 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalConfigState = {
     globalAddTask: null,
     addNewTask: 'Shift+A',
     addNewProject: 'Shift+P',
-    addNewNote: 'N',
+    addNewNote: 'Alt+N',
     openProjectNotes: 'Shift+N',
     toggleTaskViewCustomizerPanel: 'C',
     toggleIssuePanel: 'P',
     focusSideNav: 'Shift+D',
+    toggleSideNavMode: 'Ctrl+B',
     showHelp: '?',
     showSearchBar: 'Shift+F',
     toggleBacklog: 'B',
@@ -133,10 +151,10 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalConfigState = {
     zoomIn: 'Ctrl++',
     zoomOut: 'Ctrl+-',
     zoomDefault: 'Ctrl+0',
-    saveNote: 'Ctrl+S',
     triggerSync: 'Ctrl+S',
     taskEditTitle: null,
     taskToggleDetailPanelOpen: 'I',
+    taskOpenNotesPanel: 'N',
     taskOpenNotesFullscreen: null,
     taskOpenEstimationDialog: 'T',
     taskSchedule: 'S',
@@ -228,6 +246,21 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalConfigState = {
 
     localFileSync: {
       syncFolderPath: '',
+    },
+
+    nextcloud: {
+      serverUrl: null,
+      loginName: null,
+      userName: null,
+      password: null,
+      syncFolderPath: 'super-productivity',
+    },
+
+    oneDrive: {
+      useCustomApp: !HAS_OFFICIAL_ONEDRIVE_CLIENT_ID,
+      clientId: OFFICIAL_ONEDRIVE_CLIENT_ID,
+      tenantId: 'common',
+      syncFolderPath: 'Super Productivity',
     },
   },
 } as const;

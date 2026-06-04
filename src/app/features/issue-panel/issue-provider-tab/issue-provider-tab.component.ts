@@ -50,6 +50,7 @@ import { IS_MOUSE_PRIMARY } from '../../../util/is-mouse-primary';
 import { getIssueProviderHelpLink } from '../../issue/mapping-helper/get-issue-provider-help-link';
 import { ISSUE_PROVIDER_HUMANIZED } from '../../issue/issue.const';
 import { IssuePanelCalendarAgendaComponent } from '../issue-panel-calendar-agenda/issue-panel-calendar-agenda.component';
+import { PluginIssueProviderRegistryService } from '../../../plugins/issue-provider/plugin-issue-provider-registry.service';
 import { standardListAnimation } from '../../../ui/animations/standard-list.ani';
 import { MatIconButton } from '@angular/material/button';
 import { TranslatePipe } from '@ngx-translate/core';
@@ -57,6 +58,7 @@ import { MatInput } from '@angular/material/input';
 import { MatTooltip } from '@angular/material/tooltip';
 import { MatProgressSpinner } from '@angular/material/progress-spinner';
 import { Log } from '../../../core/log';
+import { IssueProviderJira } from '../../issue/issue.model';
 
 @Component({
   selector: 'issue-provider-tab',
@@ -89,11 +91,18 @@ export class IssueProviderTabComponent implements OnDestroy, AfterViewInit {
   readonly SEARCH_MIN_LENGTH = 1;
   readonly ISSUE_PROVIDER_HUMANIZED = ISSUE_PROVIDER_HUMANIZED;
   protected readonly IS_WEB_EXTENSION_REQUIRED_FOR_JIRA = IS_WEB_BROWSER;
+  protected isJiraDirectFetchEnabled = computed(() => {
+    const ip = this.issueProvider();
+    return (
+      ip.issueProviderKey === 'JIRA' && !!(ip as IssueProviderJira).allowFetchFallback
+    );
+  });
 
   dropListService = inject(DropListService);
   private _issueService = inject(IssueService);
   private _matDialog = inject(MatDialog);
   private _store = inject(Store);
+  private _pluginRegistry = inject(PluginIssueProviderRegistryService);
 
   issueProvider = input.required<IssueProvider>();
   issueProvider$ = toObservable(this.issueProvider);
@@ -101,6 +110,11 @@ export class IssueProviderTabComponent implements OnDestroy, AfterViewInit {
   searchText = signal('');
   searchTxt$ = toObservable(this.searchText);
 
+  useAgendaView = computed(
+    () =>
+      this.issueProvider().issueProviderKey === 'ICAL' ||
+      this._pluginRegistry.getUseAgendaView(this.issueProvider().issueProviderKey),
+  );
   issueProviderTooltip = computed(() => getIssueProviderTooltip(this.issueProvider()));
   issueProviderHelpLink = computed(() =>
     getIssueProviderHelpLink(this.issueProvider().issueProviderKey),
@@ -248,7 +262,7 @@ export class IssueProviderTabComponent implements OnDestroy, AfterViewInit {
       throw new Error('Issue Provider and Search Result Type dont match');
     }
 
-    Log.log('Add issue', item);
+    Log.log('Add issue', { issueType: item.issueType });
 
     this._issueService.addTaskFromIssue({
       issueDataReduced: item.issueData,

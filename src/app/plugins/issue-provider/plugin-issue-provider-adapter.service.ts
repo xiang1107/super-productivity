@@ -1,5 +1,6 @@
 import { inject, Injectable } from '@angular/core';
 import { Store } from '@ngrx/store';
+import { HttpErrorResponse } from '@angular/common/http';
 import {
   IssueData,
   IssueDataReduced,
@@ -16,6 +17,11 @@ import { PluginHttp, RegisteredPluginIssueProvider } from './plugin-issue-provid
 import { selectIssueProviderById } from '../../features/issue/store/issue-provider.selectors';
 import { firstValueFrom } from 'rxjs';
 import { SnackService } from '../../core/snack/snack.service';
+import { TaskService } from '../../features/tasks/task.service';
+import { TagService } from '../../features/tag/tag.service';
+import { sortTagLabels } from './plugin-tag-utils';
+import { getDbDateStr } from '../../util/get-db-date-str';
+import { T } from '../../t.const';
 
 @Injectable({ providedIn: 'root' })
 export class PluginIssueProviderAdapterService implements IssueServiceInterface {
@@ -23,6 +29,8 @@ export class PluginIssueProviderAdapterService implements IssueServiceInterface 
   private _pluginHttp = inject(PluginHttpService);
   private _store = inject(Store);
   private _snackService = inject(SnackService);
+  private _taskService = inject(TaskService);
+  private _tagService = inject(TagService);
 
   // Not meaningful for a multi-plugin adapter, but required by interface
   pollInterval = 0;
@@ -100,18 +108,28 @@ export class PluginIssueProviderAdapterService implements IssueServiceInterface 
   }
 
   getAddTaskData(issueData: IssueDataReduced): IssueTask {
-    const data = issueData as PluginIssue;
-    const isDone = this._computeIsDone(data);
+    return this._buildBaseIssueTask(issueData as PluginIssue);
+  }
+
+  getAddTaskDataForCfg(issueData: IssueDataReduced, cfg: unknown): IssueTask {
+    const pluginCfg = this._asPluginCfg(cfg);
+    if (!pluginCfg) {
+      return this.getAddTaskData(issueData);
+    }
+
+    const provider = this._registry.getProvider(pluginCfg.issueProviderKey);
+    if (!provider) {
+      return this.getAddTaskData(issueData);
+    }
+
+    const issue = issueData as PluginIssue;
+    const syncValues = this._extractSyncValues(issue, provider);
+    const tagIds = this._extractInitialTagIds(provider, syncValues, pluginCfg, issue);
 
     return {
-      title: ((data as Record<string, unknown>)['summary'] as string) || data.title,
-      issueId: data.id,
-      issueWasUpdated: false,
-      issueLastUpdated: data.lastUpdated ?? Date.now(),
-      issueAttachmentNr: 0,
-      issuePoints: undefined,
-      issueTimeTracked: undefined,
-      isDone,
+      ...this._getAddTaskDataForProvider(issue, provider, syncValues),
+      ...(tagIds ? { tagIds } : {}),
+      issueLastSyncedValues: syncValues,
     };
   }
 
@@ -176,17 +194,43 @@ export class PluginIssueProviderAdapterService implements IssueServiceInterface 
       if (!issue) {
         return null;
       }
+
+      // Check if the issue state indicates remote deletion
+      const deletedStates = resolved.provider.definition.deletedStates;
+      if (deletedStates?.length && issue.state) {
+        const stateLower = issue.state.toLowerCase();
+        if (deletedStates.some((s) => s.toLowerCase() === stateLower)) {
+          this._handleRemoteDeletion(task);
+          return null;
+        }
+      }
+
       const isUpdated =
         issue.lastUpdated != null && issue.lastUpdated > (task.issueLastUpdated || 0);
       if (isUpdated) {
-        const addTaskData = this.getAddTaskData(issue);
-        const issueLastSyncedValues =
-          resolved.provider.definition.extractSyncValues?.(issue);
+        // Compute sync values once and pass through to avoid redundant calls
+        const issueLastSyncedValues = this._extractSyncValues(issue, resolved.provider);
+        const addTaskData = this._getAddTaskDataForProvider(
+          issue,
+          resolved.provider,
+          issueLastSyncedValues,
+        );
+
+        // Apply field mappings to pull changes from issue to task
+        const fieldChanges = this._applyFieldMappingPull(
+          resolved.provider,
+          issueLastSyncedValues,
+          task,
+          cfg,
+          issue,
+        );
+
         return {
           taskChanges: {
             ...addTaskData,
+            ...fieldChanges,
             issueWasUpdated: true,
-            ...(issueLastSyncedValues ? { issueLastSyncedValues } : {}),
+            issueLastSyncedValues,
           },
           issue,
           issueTitle: issue.title,
@@ -194,6 +238,11 @@ export class PluginIssueProviderAdapterService implements IssueServiceInterface 
       }
       return null;
     } catch (e) {
+      // Detect 404 = issue deleted remotely
+      if (e instanceof HttpErrorResponse && (e.status === 404 || e.status === 410)) {
+        this._handleRemoteDeletion(task);
+        return null;
+      }
       console.error(
         `[PluginIssueAdapter] getFreshDataForIssueTask failed for ${cfg.issueProviderKey}:`,
         e,
@@ -249,7 +298,7 @@ export class PluginIssueProviderAdapterService implements IssueServiceInterface 
 
   // --- Private helpers ---
 
-  private _asPluginCfg(cfg: IssueIntegrationCfg): IssueProviderPluginType | undefined {
+  private _asPluginCfg(cfg: unknown): IssueProviderPluginType | undefined {
     const candidate = cfg as unknown as Record<string, unknown>;
     if (
       typeof candidate['pluginId'] !== 'string' ||
@@ -272,8 +321,9 @@ export class PluginIssueProviderAdapterService implements IssueServiceInterface 
     if (!provider) {
       return undefined;
     }
-    const http = this._pluginHttp.createHttpHelper(() =>
-      provider.definition.getHeaders(cfg.pluginConfig),
+    const http = this._pluginHttp.createHttpHelper(
+      () => provider.definition.getHeaders(cfg.pluginConfig),
+      { allowPrivateNetwork: provider.allowPrivateNetwork },
     );
     return { provider, http };
   }
@@ -294,11 +344,269 @@ export class PluginIssueProviderAdapterService implements IssueServiceInterface 
     }
   }
 
+  private _getIssueNumber(issue: PluginIssue): number | undefined {
+    const n = (issue as { number?: unknown }).number;
+    return typeof n === 'number' ? n : undefined;
+  }
+
+  private _extractSyncValues(
+    issue: PluginIssue,
+    provider: RegisteredPluginIssueProvider,
+  ): Record<string, unknown> {
+    const fieldMappings = provider.definition.fieldMappings;
+    if (!fieldMappings?.length) {
+      return {};
+    }
+
+    const data = provider.definition.extractSyncValues
+      ? provider.definition.extractSyncValues(issue)
+      : (issue as Record<string, unknown>);
+    const issueRecord = issue as Record<string, unknown>;
+    const result: Record<string, unknown> = {};
+
+    for (const mapping of fieldMappings) {
+      const value = Object.prototype.hasOwnProperty.call(data, mapping.issueField)
+        ? data[mapping.issueField]
+        : issueRecord[mapping.issueField];
+      if (value === undefined) {
+        continue;
+      }
+      result[mapping.issueField] =
+        mapping.taskField === 'tagIds' ? sortTagLabels(value) : value;
+    }
+
+    return result;
+  }
+
+  private _extractTaskFieldsFromIssueWithSyncValues(
+    issue: PluginIssue,
+    provider: RegisteredPluginIssueProvider,
+    syncValues: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const issueRecord = issue as Record<string, unknown>;
+    const result: Record<string, unknown> = {};
+    const ctx = { issueId: issue.id, issueNumber: this._getIssueNumber(issue) };
+
+    const mappings = provider.definition.fieldMappings;
+    if (!mappings?.length) {
+      return {};
+    }
+    for (const mapping of mappings) {
+      const issueValue =
+        syncValues[mapping.issueField] ?? issueRecord[mapping.issueField];
+      if (issueValue == null) {
+        continue;
+      }
+      if (mapping.taskField === 'tagIds') {
+        continue;
+      }
+      const taskValue = mapping.toTaskValue(issueValue, ctx);
+      if (taskValue != null) {
+        result[mapping.taskField] = taskValue;
+      }
+    }
+    return result;
+  }
+
+  private _getAddTaskDataForProvider(
+    issueData: IssueDataReduced,
+    provider: RegisteredPluginIssueProvider,
+    syncValues: Record<string, unknown>,
+  ): IssueTask {
+    const data = issueData as PluginIssue;
+    const base = this._buildBaseIssueTask(data);
+    const fieldValues = this._extractTaskFieldsFromIssueWithSyncValues(
+      data,
+      provider,
+      syncValues,
+    );
+    return { ...base, ...fieldValues } as IssueTask;
+  }
+
+  private _buildBaseIssueTask(data: PluginIssue): IssueTask {
+    const isDone = this._computeIsDone(data);
+    const raw = data as Record<string, unknown>;
+    const dueWithTime =
+      typeof raw['dueWithTime'] === 'number' ? (raw['dueWithTime'] as number) : undefined;
+    const startMs =
+      typeof raw['start'] === 'number' ? (raw['start'] as number) : undefined;
+
+    return {
+      title: data.title,
+      issueId: data.id,
+      issueWasUpdated: false,
+      issueLastUpdated: data.lastUpdated ?? 0,
+      issueAttachmentNr: 0,
+      issuePoints: undefined,
+      issueTimeTracked: undefined,
+      isDone,
+      ...(dueWithTime != null
+        ? { dueWithTime }
+        : startMs != null
+          ? { dueDay: getDbDateStr(startMs) }
+          : {}),
+    };
+  }
+
   private _computeIsDone(issue: PluginIssue): boolean {
     const state = issue.state?.toLowerCase();
     if (!state) {
       return false;
     }
     return ['closed', 'done', 'completed', 'resolved'].includes(state);
+  }
+
+  private _handleRemoteDeletion(task: Task): void {
+    const hasTimeTracking = task.timeSpent > 0;
+    if (hasTimeTracking) {
+      this._snackService.open({
+        type: 'WARNING',
+        msg: T.F.ISSUE.S.REMOTE_ISSUE_DELETED_WITH_TIME,
+        translateParams: { taskTitle: task.title },
+        ico: 'delete_forever',
+        actionStr: T.G.DELETE,
+        actionFn: () => this._taskService.removeMultipleTasks([task.id]),
+      });
+    } else {
+      this._taskService.removeMultipleTasks([task.id]);
+      this._snackService.open({
+        type: 'CUSTOM',
+        msg: T.F.ISSUE.S.REMOTE_ISSUE_DELETED,
+        translateParams: { taskTitle: task.title },
+        ico: 'delete_forever',
+      });
+    }
+  }
+
+  private _mapLabelsToTagIds(labels: string[], shouldCreate: boolean): string[] {
+    const allTags = this._tagService.tagsNoMyDayAndNoList();
+    // Dedupe + track tags created in this call so a provider returning
+    // duplicate labels (['bug','bug']) doesn't create duplicate tags — the
+    // snapshot above is taken once and won't reflect addTag dispatches
+    // inside the loop.
+    const uniqueLabels = Array.from(new Set(labels));
+    const createdByTitle = new Map<string, string>();
+    const tagIds: string[] = [];
+    for (const label of uniqueLabels) {
+      const existing = allTags.find((t) => t.title === label);
+      if (existing) {
+        tagIds.push(existing.id);
+      } else if (createdByTitle.has(label)) {
+        tagIds.push(createdByTitle.get(label)!);
+      } else if (shouldCreate) {
+        const newId = this._tagService.addTag({ title: label });
+        createdByTitle.set(label, newId);
+        tagIds.push(newId);
+      }
+    }
+    return tagIds;
+  }
+
+  private _extractInitialTagIds(
+    provider: RegisteredPluginIssueProvider,
+    syncValues: Record<string, unknown>,
+    cfg: IssueProviderPluginType,
+    issue: PluginIssue,
+  ): string[] | undefined {
+    const fieldMappings = provider.definition.fieldMappings;
+    if (!fieldMappings?.length) {
+      return undefined;
+    }
+
+    const twoWaySync = (cfg.pluginConfig?.['twoWaySync'] as Record<string, string>) ?? {};
+    const ctx = {
+      issueId: issue.id,
+      issueNumber: this._getIssueNumber(issue),
+    };
+    const isAutoCreateTags = !!(cfg.pluginConfig as Record<string, unknown>)?.[
+      'isAutoCreateTags'
+    ];
+
+    for (const mapping of fieldMappings) {
+      const dir = twoWaySync[mapping.taskField] ?? mapping.defaultDirection;
+      if (mapping.taskField !== 'tagIds' || (dir !== 'pullOnly' && dir !== 'both')) {
+        continue;
+      }
+
+      const issueValue = syncValues[mapping.issueField];
+      if (issueValue == null) {
+        continue;
+      }
+
+      const labels = sortTagLabels(mapping.toTaskValue(issueValue, ctx));
+      return this._mapLabelsToTagIds(labels, isAutoCreateTags);
+    }
+
+    return undefined;
+  }
+
+  private _applyFieldMappingPull(
+    provider: RegisteredPluginIssueProvider,
+    freshSyncValues: Record<string, unknown>,
+    task: Task,
+    cfg: IssueProviderPluginType,
+    issue: PluginIssue,
+  ): Partial<Task> {
+    const fieldMappings = provider.definition.fieldMappings;
+    if (!fieldMappings?.length) {
+      return {};
+    }
+
+    const twoWaySync = (cfg.pluginConfig?.['twoWaySync'] as Record<string, string>) ?? {};
+    const lastSyncedValues = task.issueLastSyncedValues ?? {};
+    const ctx = {
+      issueId: task.issueId!,
+      issueNumber: this._getIssueNumber(issue),
+    };
+    const changes: Record<string, unknown> = {};
+
+    for (const mapping of fieldMappings) {
+      const dir = twoWaySync[mapping.taskField] ?? mapping.defaultDirection;
+      if (dir !== 'pullOnly' && dir !== 'both') {
+        continue;
+      }
+
+      const freshValue = freshSyncValues[mapping.issueField];
+      const lastValue = lastSyncedValues[mapping.issueField];
+
+      if (mapping.taskField === 'tagIds') {
+        const toLabels = (v: unknown): string[] => {
+          const taskValue = v != null ? mapping.toTaskValue(v, ctx) : [];
+          return sortTagLabels(taskValue);
+        };
+        const labels = toLabels(freshValue);
+        const lastLabels = toLabels(lastValue);
+        if (
+          labels.length === lastLabels.length &&
+          labels.every((l, i) => l === lastLabels[i])
+        ) {
+          continue;
+        }
+        const isAutoCreateTags = !!(cfg.pluginConfig as Record<string, unknown>)?.[
+          'isAutoCreateTags'
+        ];
+        const tagIds = this._mapLabelsToTagIds(labels, isAutoCreateTags);
+        changes.tagIds = tagIds;
+        continue;
+      }
+
+      // Only pull if the issue value actually changed since last sync
+      if (freshValue === lastValue) {
+        continue;
+      }
+
+      const taskValue = mapping.toTaskValue(freshValue, ctx);
+      if (taskValue !== undefined) {
+        changes[mapping.taskField] = taskValue;
+        // Clear mutually exclusive fields (use null to explicitly unset)
+        if (mapping.mutuallyExclusive) {
+          for (const field of mapping.mutuallyExclusive) {
+            changes[field] = null;
+          }
+        }
+      }
+    }
+
+    return changes as Partial<Task>;
   }
 }

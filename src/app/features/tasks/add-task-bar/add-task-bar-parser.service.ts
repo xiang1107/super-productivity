@@ -5,8 +5,9 @@ import { AddTaskBarStateService } from './add-task-bar-state.service';
 import { SHORT_SYNTAX_TIME_REG_EX, shortSyntax } from '../short-syntax';
 import { ShortSyntaxConfig } from '../../config/global-config.model';
 import { getDbDateStr } from '../../../util/get-db-date-str';
-import { TimeSpentOnDay } from '../task.model';
+import { TimeSpentOnDay, TaskReminderOptionId } from '../task.model';
 import { TaskAttachment } from '../task-attachment/task-attachment.model';
+import { millisecondsDiffToRemindOption } from '../util/remind-option-to-milliseconds';
 
 interface PreviousParseResult {
   cleanText: string | null;
@@ -18,12 +19,16 @@ interface PreviousParseResult {
   dueDate: string | null;
   dueTime: string | null;
   attachments: TaskAttachment[];
+  deadlineDate: string | null;
+  deadlineTime: string | null;
+  deadlineRemindOption: TaskReminderOptionId | null;
 }
 
 @Injectable()
 export class AddTaskBarParserService {
   private readonly _stateService = inject(AddTaskBarStateService);
   private _previousParseResult: PreviousParseResult | null = null;
+  private _parseRunId = 0;
 
   private _arraysEqual<T>(a: T[], b: T[]): boolean {
     return a.length === b.length && a.every((val, i) => val === b[i]);
@@ -44,6 +49,8 @@ export class AddTaskBarParserService {
     defaultDate?: string,
     defaultTime?: string,
   ): Promise<void> {
+    const parseRunId = ++this._parseRunId;
+
     if (!text || !config) {
       this._previousParseResult = null;
       return;
@@ -59,6 +66,10 @@ export class AddTaskBarParserService {
       undefined,
       'replace',
     );
+
+    if (parseRunId !== this._parseRunId) {
+      return;
+    }
 
     // Create current parse result data structure
     let currentResult: PreviousParseResult;
@@ -80,6 +91,9 @@ export class AddTaskBarParserService {
         dueDate: currentState.date || (defaultDate ? defaultDate : null),
         dueTime: currentState.time || defaultTime || null,
         attachments: [],
+        deadlineDate: currentState.deadlineDate || null,
+        deadlineTime: currentState.deadlineTime || null,
+        deadlineRemindOption: currentState.deadlineRemindOption || null,
       };
     } else {
       // Extract parsed values
@@ -107,6 +121,34 @@ export class AddTaskBarParserService {
         dueTime = defaultTime || null;
       }
 
+      let deadlineDate: string | null = null;
+      let deadlineTime: string | null = null;
+      let deadlineRemindOption: TaskReminderOptionId | null = null;
+
+      if (parseResult.taskChanges.deadlineWithTime) {
+        const deadlineDateObj = new Date(parseResult.taskChanges.deadlineWithTime);
+        deadlineDate = getDbDateStr(deadlineDateObj);
+
+        if (parseResult.taskChanges.hasDeadlineTime !== false) {
+          const hours = deadlineDateObj.getHours().toString().padStart(2, '0');
+          const minutes = deadlineDateObj.getMinutes().toString().padStart(2, '0');
+          const timeStr = `${hours}:${minutes}`;
+
+          if (timeStr !== '00:00') {
+            deadlineTime = timeStr;
+          }
+        }
+
+        if (parseResult.taskChanges.deadlineRemindAt) {
+          deadlineRemindOption = millisecondsDiffToRemindOption(
+            parseResult.taskChanges.deadlineWithTime,
+            parseResult.taskChanges.deadlineRemindAt,
+          );
+        }
+      } else if (parseResult.taskChanges.deadlineDay) {
+        deadlineDate = parseResult.taskChanges.deadlineDay;
+      }
+
       currentResult = {
         cleanText: parseResult.taskChanges.title || text,
         projectId: parseResult.projectId || null,
@@ -117,6 +159,9 @@ export class AddTaskBarParserService {
         dueDate: dueDate,
         dueTime: dueTime,
         attachments: parseResult.attachments || [],
+        deadlineDate: deadlineDate,
+        deadlineTime: deadlineTime,
+        deadlineRemindOption: deadlineRemindOption,
       };
     }
 
@@ -181,8 +226,9 @@ export class AddTaskBarParserService {
     }
 
     if (
-      !this._previousParseResult ||
-      this._previousParseResult.timeEstimate !== currentResult.timeEstimate
+      (!this._previousParseResult && currentResult.timeEstimate !== null) ||
+      (this._previousParseResult &&
+        this._previousParseResult.timeEstimate !== currentResult.timeEstimate)
     ) {
       this._stateService.updateEstimate(currentResult.timeEstimate);
     }
@@ -203,17 +249,41 @@ export class AddTaskBarParserService {
       this._stateService.updateAttachments(currentResult.attachments);
     }
 
+    const deadlineChanged =
+      !this._previousParseResult ||
+      !this._datesEqual(
+        this._previousParseResult.deadlineDate,
+        currentResult.deadlineDate,
+      ) ||
+      this._previousParseResult.deadlineTime !== currentResult.deadlineTime;
+
+    if (deadlineChanged) {
+      this._stateService.updateDeadline(
+        currentResult.deadlineDate,
+        currentResult.deadlineTime,
+      );
+    }
+
+    if (
+      !this._previousParseResult ||
+      this._previousParseResult.deadlineRemindOption !==
+        currentResult.deadlineRemindOption
+    ) {
+      this._stateService.updateDeadlineRemindOption(currentResult.deadlineRemindOption);
+    }
+
     // Store current result as previous for next comparison
     this._previousParseResult = currentResult;
   }
 
   resetPreviousResult(): void {
+    this._parseRunId++;
     this._previousParseResult = null;
   }
 
   removeShortSyntaxFromInput(
     currentInput: string,
-    type: 'tags' | 'date' | 'estimate' | 'urls',
+    type: 'tags' | 'date' | 'estimate' | 'urls' | 'deadline',
     specificTag?: string,
   ): string {
     if (!currentInput) return currentInput;
@@ -235,6 +305,11 @@ export class AddTaskBarParserService {
       case 'date':
         // Remove date and time syntax (e.g., @today @16:30 @2024-01-15)
         cleanedInput = cleanedInput.replace(/\s*@\S+/g, '');
+        break;
+
+      case 'deadline':
+        // Remove deadline date and time syntax (e.g., !today !16:30 !2024-01-15)
+        cleanedInput = cleanedInput.replace(/\s*!\S+/g, '');
         break;
 
       case 'estimate':

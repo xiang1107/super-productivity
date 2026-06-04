@@ -62,6 +62,8 @@ export class TaskPage extends BasePage {
     await doneBtn.waitFor({ state: 'visible', timeout: 5000 });
     await doneBtn.click();
 
+    // Wait for the done animation delay (200ms) and state change to settle
+    await this.page.waitForTimeout(300);
     await waitForAngularStability(this.page);
   }
 
@@ -97,7 +99,7 @@ export class TaskPage extends BasePage {
     await task.waitFor({ state: 'visible' });
     await task.hover();
     const showDetailBtn = this.page.getByRole('button', {
-      name: 'Show/Hide additional info',
+      name: 'Show/hide task panel',
     });
     await showDetailBtn.waitFor({ state: 'visible', timeout: 3000 });
     await showDetailBtn.click();
@@ -214,7 +216,7 @@ export class TaskPage extends BasePage {
   async toggleTaskDetail(task: Locator): Promise<void> {
     await task.hover();
     const toggleBtn = this.page.getByRole('button', {
-      name: 'Show/Hide additional info',
+      name: 'Show/hide task panel',
     });
     await toggleBtn.click();
     await this.page.waitForTimeout(300);

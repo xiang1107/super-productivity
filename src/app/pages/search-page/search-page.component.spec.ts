@@ -190,6 +190,30 @@ describe('SearchPageComponent', () => {
     typeAndFlush('Child');
     expect(latestResults.length).toBe(1);
     expect(latestResults[0].tagId).toBe('tag-parent');
+    expect(latestResults[0].parentTitle).toBe('Parent');
+  }));
+
+  it("should prefer subtask's own tagId over parent's when both have tags (#7756)", fakeAsync(() => {
+    const parent = createTask({
+      id: 'parent-2',
+      title: 'Parent2',
+      tagIds: ['tag-parent'],
+    });
+    const child = createTask({
+      id: 'child-2',
+      title: 'Tagged Child',
+      parentId: 'parent-2',
+      tagIds: ['tag-own'],
+    });
+    tags$.next([
+      createTag({ id: 'tag-parent', title: 'Parent Tag', icon: 'star' }),
+      createTag({ id: 'tag-own', title: 'Own Tag', icon: 'label' }),
+    ]);
+    allTasks$.next([parent, child]);
+    initAndFlush();
+    typeAndFlush('Tagged');
+    expect(latestResults.length).toBe(1);
+    expect(latestResults[0].tagId).toBe('tag-own');
   }));
 
   it('should use project context for tasks with projectId', fakeAsync(() => {
@@ -217,6 +241,21 @@ describe('SearchPageComponent', () => {
     typeAndFlush('Tag');
     expect(latestResults.length).toBe(1);
     expect(latestResults[0].ctx.title).toBe('My Tag');
+  }));
+
+  it('should reflect isDone state on the result item (#7807)', fakeAsync(() => {
+    const task = createTask({ id: 't1', title: 'Finish report', isDone: false });
+    allTasks$.next([task]);
+    initAndFlush();
+    typeAndFlush('Finish');
+    expect(latestResults.length).toBe(1);
+    expect(latestResults[0].isDone).toBe(false);
+
+    // Mark the task done — the search result must update without re-mounting
+    allTasks$.next([{ ...task, isDone: true }]);
+    tick(150);
+    expect(latestResults.length).toBe(1);
+    expect(latestResults[0].isDone).toBe(true);
   }));
 
   it('should mark archive tasks with isArchiveTask=true', fakeAsync(() => {
@@ -263,6 +302,7 @@ describe('SearchPageComponent', () => {
     expect(latestResults.length).toBe(1);
     // Should fall back to own tagIds instead of crashing
     expect(latestResults[0].tagId).toBe('tag-1');
+    expect(latestResults[0].parentTitle).toBeNull();
   }));
 
   it('should handle missing context gracefully with fallback icon', fakeAsync(() => {
@@ -292,6 +332,10 @@ describe('SearchPageComponent', () => {
   }));
 
   it('should not crash when parent.tagIds is undefined', fakeAsync(() => {
+    // Robustness: parent.tagIds undefined must not crash the chip resolution.
+    // With #7756 the child's own tags win when present, so the child gets its
+    // own tag here. The no-crash guarantee comes from the optional chaining on
+    // the fallback path (parent?.tagIds?.[0]).
     const parent = createTask({
       id: 'parent-1',
       title: 'Parent',
@@ -306,6 +350,25 @@ describe('SearchPageComponent', () => {
     allTasks$.next([parent, child]);
     initAndFlush();
     typeAndFlush('Child Bad');
+    expect(latestResults.length).toBe(1);
+    expect(latestResults[0].tagId).toBe('tag-1');
+  }));
+
+  it('should not crash when both task.tagIds and parent.tagIds are undefined', fakeAsync(() => {
+    const parent = createTask({
+      id: 'parent-1',
+      title: 'Parent',
+      tagIds: undefined as any,
+    });
+    const child = createTask({
+      id: 'child-1',
+      title: 'Child No Tags',
+      parentId: 'parent-1',
+      tagIds: undefined as any,
+    });
+    allTasks$.next([parent, child]);
+    initAndFlush();
+    typeAndFlush('Child No');
     expect(latestResults.length).toBe(1);
     expect(latestResults[0].tagId).toBeUndefined();
   }));

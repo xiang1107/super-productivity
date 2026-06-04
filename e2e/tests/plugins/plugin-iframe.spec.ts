@@ -22,10 +22,6 @@ test.describe.serial('Plugin Iframe', () => {
     // Ensure plugin assets are available
     const assetsAvailable = await waitForPluginAssets(page);
     if (!assetsAvailable) {
-      if (process.env.CI) {
-        test.skip(true, 'Plugin assets not available in CI - skipping test');
-        return;
-      }
       throw new Error('Plugin assets not available - cannot proceed with test');
     }
 
@@ -59,18 +55,6 @@ test.describe.serial('Plugin Iframe', () => {
 
     if (!pluginInMenu) {
       throw new Error('API Test Plugin not found in menu after enabling');
-    }
-
-    // Dismiss tour dialog if present (non-blocking)
-    const tourDialog = page.locator('[data-shepherd-step-id="Welcome"]');
-    if (await tourDialog.isVisible().catch(() => false)) {
-      const cancelBtn = page.locator(
-        'button:has-text("No thanks"), .shepherd-cancel-icon',
-      );
-      if (await cancelBtn.isVisible().catch(() => false)) {
-        await cancelBtn.click();
-        await tourDialog.waitFor({ state: 'hidden' });
-      }
     }
   });
 

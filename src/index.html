@@ -100,14 +100,6 @@ TODO configure more restrictive Content-Security-Policy
         color: #fff;
       }
 
-      @media (prefers-color-scheme: light) {
-        body {
-          background: transparent;
-          background-image: none;
-          color: #000000;
-        }
-      }
-
       .loading-full-page-wrapper {
         position: absolute;
         top: 0;
@@ -136,6 +128,22 @@ TODO configure more restrictive Content-Security-Policy
         transform: translate(-50%, -50%);
         width: 90px;
         height: 90px;
+      }
+
+      .app-loading .logo path {
+        fill: #fff;
+      }
+
+      @media (prefers-color-scheme: light) {
+        body {
+          background: transparent;
+          background-image: none;
+          color: #000000;
+        }
+
+        .app-loading .logo path {
+          fill: #000;
+        }
       }
 
       .app-loading .spinner {
@@ -169,12 +177,13 @@ TODO configure more restrictive Content-Security-Policy
         padding-bottom: 10px;
       }
 
-      .app-loading .productivity-tip h2 {
+      .app-loading .productivity-tip h2#heading {
         font:
           500 20px/32px 'Open Sans',
           'Helvetica Neue',
           sans-serif;
         margin: 0 0 8px !important;
+        color: inherit;
       }
 
       .app-loading .productivity-tip p {
@@ -219,7 +228,6 @@ TODO configure more restrictive Content-Security-Policy
               d="M 0.65537046,34.582787 32.452267,63.855301 63.791548,0.94356422 30.222644,47.722023 Z"
               id="path3395"
               style="
-                fill: #000000;
                 fill-opacity: 1;
                 fill-rule: evenodd;
                 stroke: none;
@@ -237,6 +245,39 @@ TODO configure more restrictive Content-Security-Policy
     </app-root>
     <noscript>Please enable JavaScript to use this application.</noscript>
     <script>
+      // Browser compatibility check — must use ES5 syntax only.
+      // The app targets ES2022+ (Safari 18+, Chrome 107+). On older browsers the
+      // compiled JS will fail to parse, leaving the user stuck on the splash screen.
+      // This detects unsupported browsers early and shows a helpful message.
+      (function () {
+        var unsupported = false;
+        if (typeof structuredClone !== 'function') {
+          unsupported = true;
+        }
+        if (!unsupported) {
+          try {
+            new Function('class C { static {} }')();
+          } catch (e) {
+            unsupported = true;
+          }
+        }
+        if (unsupported) {
+          var el = document.querySelector('.app-loading');
+          if (el) {
+            el.innerHTML =
+              '<div style="text-align:center;padding:32px 24px;max-width:400px">' +
+              '<h2 style="font:500 20px/28px sans-serif;margin:0 0 16px">Browser Update Required</h2>' +
+              '<p style="font:400 14px/22px sans-serif;margin:0 0 12px">' +
+              'Super Productivity requires a newer browser version to run.' +
+              '</p>' +
+              '<p style="font:400 14px/22px sans-serif;margin:0">' +
+              'Please update your operating system or browser and try again.' +
+              '</p>' +
+              '</div>';
+          }
+        }
+      })();
+
       var productivityTips = [
         [
           'Be kind',
@@ -363,8 +404,12 @@ TODO configure more restrictive Content-Security-Policy
         ],
       ];
       var randomIndex = Math.floor(Math.random() * productivityTips.length);
-      document.getElementById('heading').innerText = productivityTips[randomIndex][0];
-      document.getElementById('text').innerText = productivityTips[randomIndex][1];
+      var headingEl = document.getElementById('heading');
+      var textEl = document.getElementById('text');
+      if (headingEl && textEl) {
+        headingEl.innerText = productivityTips[randomIndex][0];
+        textEl.innerText = productivityTips[randomIndex][1];
+      }
 
       (function () {})();
     </script>

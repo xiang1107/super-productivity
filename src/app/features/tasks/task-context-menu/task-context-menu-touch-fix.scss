@@ -33,7 +33,7 @@
   #projectMenu {
     .mat-mdc-menu-content {
       // Add padding to prevent edge touches
-      padding: 8px 0;
+      padding: var(--s) 0;
 
       .mat-mdc-menu-item {
         // Add delay to touch responsiveness
@@ -41,11 +41,18 @@
 
         &:first-child {
           // Extra padding on first item to prevent accidental selection
-          margin-top: 8px;
+          margin-top: var(--s);
         }
       }
     }
   }
+}
+
+// Highlight the source task when context menu is open
+.context-menu-highlight {
+  box-shadow: inset 0 0 0 2px var(--primary);
+  z-index: 1;
+  transition: box-shadow 200ms ease-out;
 }
 
 // Animation to re-enable pointer events after delay

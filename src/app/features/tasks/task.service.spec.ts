@@ -26,11 +26,13 @@ import { TaskDetailTargetPanel, TaskReminderOptionId } from './task.model';
 import { TODAY_TAG } from '../tag/tag.const';
 import { INBOX_PROJECT } from '../project/project.const';
 import { signal } from '@angular/core';
+import { DeletedTaskIssueSidecarService } from '../issue/two-way-sync/deleted-task-issue-sidecar.service';
 
 describe('TaskService', () => {
   let service: TaskService;
   let store: MockStore;
   let archiveService: jasmine.SpyObj<ArchiveService>;
+  let deletedTaskIssueSidecar: DeletedTaskIssueSidecarService;
   let tickSubject: Subject<{ duration: number; date: string }>;
 
   const createMockTask = (id: string, overrides: Partial<Task> = {}): Task =>
@@ -78,8 +80,12 @@ describe('TaskService', () => {
       },
     );
 
-    const dateServiceSpy = jasmine.createSpyObj('DateService', ['todayStr']);
+    const dateServiceSpy = jasmine.createSpyObj('DateService', [
+      'todayStr',
+      'getStartOfNextDayDiffMs',
+    ]);
     dateServiceSpy.todayStr.and.returnValue('2026-01-05');
+    dateServiceSpy.getStartOfNextDayDiffMs.and.returnValue(0);
 
     const routerSpy = jasmine.createSpyObj('Router', ['navigate']);
     routerSpy.navigate.and.returnValue(Promise.resolve(true));
@@ -159,6 +165,7 @@ describe('TaskService', () => {
     service = TestBed.inject(TaskService);
     store = TestBed.inject(MockStore);
     archiveService = TestBed.inject(ArchiveService) as jasmine.SpyObj<ArchiveService>;
+    deletedTaskIssueSidecar = TestBed.inject(DeletedTaskIssueSidecarService);
 
     spyOn(store, 'dispatch').and.callThrough();
   });
@@ -272,6 +279,16 @@ describe('TaskService', () => {
 
       expect(action.task.notes).toBe('Test notes');
     });
+
+    it('should include auto-plan context when adding a task with a deadline today', () => {
+      service.add('New Task', false, { deadlineDay: '2026-01-05' });
+
+      const dispatchCall = (store.dispatch as jasmine.Spy).calls.mostRecent();
+      const action = dispatchCall.args[0] as ReturnType<typeof TaskSharedActions.addTask>;
+
+      expect(action.autoPlanToday).toBe('2026-01-05');
+      expect(action.autoPlanStartOfNextDayDiffMs).toBe(0);
+    });
   });
 
   describe('addToToday', () => {
@@ -281,7 +298,11 @@ describe('TaskService', () => {
       service.addToToday(task);
 
       expect(store.dispatch).toHaveBeenCalledWith(
-        TaskSharedActions.planTasksForToday({ taskIds: ['task-1'] }),
+        TaskSharedActions.planTasksForToday({
+          taskIds: ['task-1'],
+          today: '2026-01-05',
+          startOfNextDayDiffMs: 0,
+        }),
       );
     });
   });
@@ -297,12 +318,19 @@ describe('TaskService', () => {
   });
 
   describe('removeMultipleTasks', () => {
-    it('should dispatch deleteTasks', () => {
+    it('should dispatch deleteTasks with only taskIds', () => {
       service.removeMultipleTasks(['task-1', 'task-2']);
 
       expect(store.dispatch).toHaveBeenCalledWith(
         TaskSharedActions.deleteTasks({ taskIds: ['task-1', 'task-2'] }),
       );
+    });
+
+    it('should populate sidecar with issue info before dispatch', () => {
+      spyOn(deletedTaskIssueSidecar, 'set');
+      service.removeMultipleTasks(['task-1', 'task-2']);
+
+      expect(deletedTaskIssueSidecar.set).toHaveBeenCalledWith([]);
     });
   });
 
@@ -459,6 +487,19 @@ describe('TaskService', () => {
       expect(store.dispatch).not.toHaveBeenCalledWith(
         jasmine.objectContaining({ type: TaskSharedActions.moveToArchive.type }),
       );
+    });
+
+    it('should delegate malformed-task filtering to archive.service', async () => {
+      // Sanitization lives in archive.service (sanitizeTasksForArchiving) so the
+      // same rules apply to both moveTasksToArchiveAndFlushArchiveIfDue and
+      // writeTasksToArchiveForRemoteSync. task.service is a pass-through here.
+      const invalidTask = { title: 'Broken task', subTasks: [] } as any;
+
+      await service.moveToArchive([invalidTask]);
+
+      expect(archiveService.moveTasksToArchiveAndFlushArchiveIfDue).toHaveBeenCalledWith([
+        invalidTask,
+      ]);
     });
   });
 
@@ -645,6 +686,53 @@ describe('TaskService', () => {
       });
 
       expect(task.projectId).toBe(INBOX_PROJECT.id);
+    });
+
+    it('should clear invalid dueDay from additional fields', () => {
+      // Prevent devError from throwing (it calls alert + confirm -> throws if true)
+      if (!jasmine.isSpy(window.alert)) {
+        spyOn(window, 'alert');
+      }
+      if (!jasmine.isSpy(window.confirm)) {
+        spyOn(window, 'confirm').and.returnValue(false);
+      } else {
+        (window.confirm as jasmine.Spy).and.returnValue(false);
+      }
+
+      const task = service.createNewTaskWithDefaults({
+        title: 'Test',
+        additional: { dueDay: '-/-/2026' as any },
+      });
+
+      expect(task.dueDay).toBeUndefined();
+    });
+
+    it('should clear invalid deadlineDay from additional fields', () => {
+      // Prevent devError from throwing (it calls alert + confirm -> throws if true)
+      if (!jasmine.isSpy(window.alert)) {
+        spyOn(window, 'alert');
+      }
+      if (!jasmine.isSpy(window.confirm)) {
+        spyOn(window, 'confirm').and.returnValue(false);
+      } else {
+        (window.confirm as jasmine.Spy).and.returnValue(false);
+      }
+
+      const task = service.createNewTaskWithDefaults({
+        title: 'Test',
+        additional: { deadlineDay: '3/14/2026' as any },
+      });
+
+      expect(task.deadlineDay).toBeUndefined();
+    });
+
+    it('should preserve valid dueDay from additional fields', () => {
+      const task = service.createNewTaskWithDefaults({
+        title: 'Test',
+        additional: { dueDay: '2026-03-21' },
+      });
+
+      expect(task.dueDay).toBe('2026-03-21');
     });
   });
 

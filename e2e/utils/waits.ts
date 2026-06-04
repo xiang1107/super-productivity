@@ -17,6 +17,22 @@ type WaitForAppReadyOptions = {
   routeRegex?: RegExp;
 };
 
+export const skipOnboardingForE2E = (): void => {
+  // Playwright's addInitScript runs in every frame, including iframes the app
+  // creates with a `data:` URL (e.g. plugin-index destroys its iframe by
+  // swapping in `data:text/html,<html><body></body></html>`). data: URLs have
+  // an opaque origin and accessing localStorage throws SecurityError, which
+  // the runtime-error collector would surface as a test failure.
+  try {
+    localStorage.setItem('SUP_ONBOARDING_PRESET_DONE', 'true');
+    localStorage.setItem('SUP_ONBOARDING_HINTS_DONE', 'true');
+    localStorage.setItem('SUP_IS_SHOW_TOUR', 'true');
+    localStorage.setItem('SUP_EXAMPLE_TASKS_CREATED', 'true');
+  } catch {
+    // No localStorage in this frame (data:/sandboxed); the host frame already ran us.
+  }
+};
+
 /**
  * Dismiss up to `maxAttempts` blocking confirmation dialogs.
  * Some app flows show chained dialogs (e.g., pre-migration + data-repair)
@@ -55,6 +71,27 @@ export const waitForAngularStability = async (
 };
 
 /**
+ * Dismisses the onboarding preset selection screen if present.
+ * Sets the localStorage flag to skip it without altering app feature config.
+ */
+const dismissOnboardingPresets = async (page: Page): Promise<void> => {
+  try {
+    const isVisible = await page
+      .locator('onboarding-preset-selection')
+      .waitFor({ state: 'visible', timeout: 2000 })
+      .then(() => true)
+      .catch(() => false);
+    if (isVisible) {
+      await page.evaluate(skipOnboardingForE2E);
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(500);
+    }
+  } catch {
+    // Preset selection not present, ignore
+  }
+};
+
+/**
  * Shared helper to wait until the application shell and Angular are ready.
  * Optimized for speed - removed networkidle wait and redundant checks.
  *
@@ -73,6 +110,9 @@ export const waitForAppReady = async (
   // Handle any blocking dialogs (pre-migration, confirmation, etc.)
   // These dialogs block app until dismissed
   await dismissBlockingDialogs(page);
+
+  // Dismiss onboarding preset selection if present (blocks entire UI)
+  await dismissOnboardingPresets(page);
 
   // Wait for the loading screen to disappear (if visible).
   // The app shows `.loading-full-page-wrapper` while syncing/importing data.
