@@ -484,9 +484,11 @@ export class TaskContextMenuInnerComponent implements AfterViewInit, OnDestroy {
   }
 
   async exportTask(): Promise<void> {
-    const taskWithSubTasks = this.task.parentId ? null : await this._getTaskWithSubtasks();
+    const taskWithSubTasks = this.task.parentId
+      ? null
+      : await this._getTaskWithSubtasks();
     await this._taskExportService.exportTask(
-      this.task,
+      taskWithSubTasks ?? this.task,
       taskWithSubTasks?.subTasks || [],
       false,
     );

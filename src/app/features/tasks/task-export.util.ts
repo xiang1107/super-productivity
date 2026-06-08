@@ -1,6 +1,7 @@
+import { strToU8, zipSync } from 'fflate';
 import { msToString } from '../../ui/duration/ms-to-string.pipe';
-import { TaskAttachment } from './task-attachment/task-attachment.model';
-import { Task } from './task.model';
+import type { TaskAttachment } from './task-attachment/task-attachment.model';
+import type { Task } from './task.model';
 
 const FALLBACK_VALUE = '-';
 
@@ -8,6 +9,16 @@ export interface ExportTaskAsMarkdownInput {
   task: Task;
   subTasks?: Task[];
   isArchived?: boolean;
+}
+
+export interface MarkdownImageRef {
+  url: string;
+  destination: string;
+}
+
+export interface TaskExportImageFile {
+  fileName: string;
+  blob: Blob;
 }
 
 const formatDateTime = (timestamp?: number | null): string => {
@@ -42,6 +53,25 @@ const formatSubTask = (task: Task): string => {
   const checkBox = task.isDone ? 'x' : ' ';
   const noteSuffix = task.notes ? `\n  Notes: ${task.notes.replace(/\n/g, '\n  ')}` : '';
   return `- [${checkBox}] ${task.title}${noteSuffix}`;
+};
+
+const MARKDOWN_IMAGE_REGEX = /!\[[^\]]*\]\(([^)]*)\)/g;
+
+const extractUrlFromDestination = (destination: string): string | null => {
+  const trimmed = destination.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (trimmed.startsWith('<')) {
+    const endIndex = trimmed.indexOf('>');
+    return endIndex > 1 ? trimmed.slice(1, endIndex) : null;
+  }
+
+  const titleMatch = trimmed.match(
+    /^(.+?)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)|=\d*x\d*))?$/,
+  );
+  return titleMatch?.[1]?.trim() || null;
 };
 
 export const exportTaskAsMarkdown = ({
@@ -83,3 +113,53 @@ export const exportTaskAsMarkdown = ({
 
 export const getTaskExportFileName = (task: Task, timestamp: string): string =>
   `${escapeFilenamePart(task.title)}_${timestamp}.md`;
+
+export const getTaskExportArchiveFileName = (task: Task, timestamp: string): string =>
+  `${escapeFilenamePart(task.title)}_${timestamp}.zip`;
+
+export const extractMarkdownImageRefs = (markdown: string): MarkdownImageRef[] => {
+  const refs: MarkdownImageRef[] = [];
+  const seenUrls = new Set<string>();
+
+  for (const match of markdown.matchAll(MARKDOWN_IMAGE_REGEX)) {
+    const destination = match[1];
+    const url = extractUrlFromDestination(destination);
+    if (!url || seenUrls.has(url)) {
+      continue;
+    }
+    seenUrls.add(url);
+    refs.push({ url, destination });
+  }
+
+  return refs;
+};
+
+export const rewriteMarkdownImageUrls = (
+  markdown: string,
+  replacements: ReadonlyMap<string, string>,
+): string =>
+  markdown.replace(MARKDOWN_IMAGE_REGEX, (fullMatch: string, destination: string) => {
+    const url = extractUrlFromDestination(destination);
+    const replacement = url ? replacements.get(url) : undefined;
+    return url && replacement ? fullMatch.replace(url, replacement) : fullMatch;
+  });
+
+export const createTaskExportZipBlob = async ({
+  markdownFileName,
+  markdown,
+  images,
+}: {
+  markdownFileName: string;
+  markdown: string;
+  images: TaskExportImageFile[];
+}): Promise<Blob> => {
+  const entries: Record<string, Uint8Array> = {
+    [markdownFileName]: strToU8(markdown),
+  };
+
+  for (const image of images) {
+    entries[`images/${image.fileName}`] = new Uint8Array(await image.blob.arrayBuffer());
+  }
+
+  return new Blob([zipSync(entries)], { type: 'application/zip' });
+};

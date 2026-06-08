@@ -86,6 +86,10 @@ export interface ElectronAPI {
   saveFileDialog(
     filename: string,
     data: string,
+    options?: {
+      encoding?: 'utf8' | 'base64';
+      filters?: { name: string; extensions: string[] }[];
+    },
   ): Promise<{ success: boolean; path?: string }>;
 
   shareNative(payload: {

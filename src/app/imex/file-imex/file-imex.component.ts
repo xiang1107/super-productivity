@@ -267,7 +267,7 @@ export class FileImexComponent implements OnInit {
     const data = await this._backupService.loadCompleteBackup(true);
     const fileName = `${BACKUP_FILENAME_PREFIX}_${getBackupTimestamp()}.json`;
     const result = await download(fileName, JSON.stringify(data));
-    if ((IS_NATIVE_PLATFORM && !result.wasCanceled) || result.isSnap) {
+    if ((IS_NATIVE_PLATFORM && !result.wasCanceled) || result.path) {
       this._snackService.open({
         type: 'SUCCESS',
         msg: result.path
@@ -281,7 +281,7 @@ export class FileImexComponent implements OnInit {
     const data = await this._backupService.loadCompleteBackup(true);
     const fileName = `${BACKUP_FILENAME_PREFIX_ANONYMIZED}_${getBackupTimestamp()}.json`;
     const result = await download(fileName, privacyExport(data));
-    if ((IS_NATIVE_PLATFORM && !result.wasCanceled) || result.isSnap) {
+    if ((IS_NATIVE_PLATFORM && !result.wasCanceled) || result.path) {
       this._snackService.open({
         type: 'SUCCESS',
         msg: result.path

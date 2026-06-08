@@ -4,14 +4,31 @@ import { IS_NATIVE_PLATFORM } from './is-native-platform';
 import { Log } from '../core/log';
 // Type definitions for window.ea are in ../core/window-ea.d.ts
 
+export interface DownloadResult {
+  isSnap?: boolean;
+  isElectron?: boolean;
+  path?: string;
+  wasCanceled?: boolean;
+}
+
+export interface DownloadOptions {
+  mimeType?: string;
+  filters?: { name: string; extensions: string[] }[];
+}
+
 const isRunningInSnap = (): boolean => {
   return !!window.ea?.isSnap?.();
+};
+
+const canUseElectronSaveDialog = (): boolean => {
+  return !!window.ea?.saveFileDialog;
 };
 
 export const download = async (
   filename: string,
   stringData: string,
-): Promise<{ isSnap?: boolean; path?: string; wasCanceled?: boolean }> => {
+  options: DownloadOptions = {},
+): Promise<DownloadResult> => {
   // Use Capacitor Filesystem + Share for native mobile platforms (Android and iOS)
   if (IS_NATIVE_PLATFORM) {
     try {
@@ -28,11 +45,12 @@ export const download = async (
           title: filename,
           files: [fileResult.uri],
         });
-      } catch (shareError: any) {
+      } catch (shareError: unknown) {
         const isCanceled =
           shareError === 'Share canceled' ||
-          shareError?.message === 'Share canceled' ||
-          shareError?.name === 'AbortError';
+          (shareError instanceof Error &&
+            (shareError.message === 'Share canceled' ||
+              shareError.name === 'AbortError'));
         if (isCanceled) {
           return { wasCanceled: true };
         } else {
@@ -44,24 +62,73 @@ export const download = async (
       await saveStringAsFile(filename, stringData);
     }
     return { wasCanceled: false };
-  } else if (isRunningInSnap() && window.ea?.saveFileDialog) {
-    // Use native dialog for snap to avoid AppArmor permission issues
-    const result = await window.ea.saveFileDialog(filename, stringData);
+  } else if (canUseElectronSaveDialog()) {
+    // Use the native dialog in Electron to avoid inconsistent Chromium download
+    // behavior across Linux desktop environments.
+    const result = await window.ea.saveFileDialog(filename, stringData, {
+      filters: options.filters,
+    });
     if (result.success && result.path) {
       Log.log('File saved to:', result.path);
-      return { isSnap: true, path: result.path };
+      return { isElectron: true, isSnap: isRunningInSnap(), path: result.path };
     }
-    return { isSnap: true };
+    return { isElectron: true, isSnap: isRunningInSnap(), wasCanceled: true };
   } else {
-    const blob = new Blob([stringData], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const blob = new Blob([stringData], {
+      type: options.mimeType ?? 'text/plain;charset=utf-8',
+    });
+    triggerBrowserDownload(filename, blob);
+    return {};
+  }
+};
+
+export const downloadBlob = async (
+  filename: string,
+  blob: Blob,
+  options: DownloadOptions = {},
+): Promise<DownloadResult> => {
+  if (IS_NATIVE_PLATFORM) {
+    try {
+      const fileResult = await Filesystem.writeFile({
+        path: filename,
+        data: await blobToBase64(blob),
+        directory: Directory.Cache,
+        recursive: true,
+      });
+
+      try {
+        await Share.share({
+          title: filename,
+          files: [fileResult.uri],
+        });
+      } catch (shareError: unknown) {
+        const isCanceled =
+          shareError === 'Share canceled' ||
+          (shareError instanceof Error &&
+            (shareError.message === 'Share canceled' ||
+              shareError.name === 'AbortError'));
+        if (isCanceled) {
+          return { wasCanceled: true };
+        }
+        throw shareError;
+      }
+    } catch (e) {
+      Log.error(e);
+      await saveBlobAsFile(filename, blob);
+    }
+    return { wasCanceled: false };
+  } else if (canUseElectronSaveDialog()) {
+    const result = await window.ea.saveFileDialog(filename, await blobToBase64(blob), {
+      encoding: 'base64',
+      filters: options.filters,
+    });
+    if (result.success && result.path) {
+      Log.log('File saved to:', result.path);
+      return { isElectron: true, isSnap: isRunningInSnap(), path: result.path };
+    }
+    return { isElectron: true, isSnap: isRunningInSnap(), wasCanceled: true };
+  } else {
+    triggerBrowserDownload(filename, blob);
     return {};
   }
 };
@@ -84,6 +151,38 @@ const saveStringAsFile = async (
   });
   Log.log(r);
   return r;
+};
+
+const saveBlobAsFile = async (fileName: string, blob: Blob): Promise<WriteFileResult> => {
+  const r = await Filesystem.writeFile({
+    path: fileName,
+    data: await blobToBase64(blob),
+    directory: Directory.Documents,
+    recursive: true,
+  });
+  Log.log(r);
+  return r;
+};
+
+const triggerBrowserDownload = (filename: string, blob: Blob): void => {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
+
+const blobToBase64 = async (blob: Blob): Promise<string> => {
+  const buffer = await blob.arrayBuffer();
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
 };
 
 // interestingly this can't live in the logs.ts or it leads to weird "window" not found errors
