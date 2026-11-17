@@ -127,6 +127,12 @@
 <mat-dialog-actions align="end">
   <button
     mat-button
+    (click)="exportTask()"
+  >
+    {{ T.F.TASK.EXPORT.ACTION | translate }}
+  </button>
+  <button
+    mat-button
     mat-dialog-close
   >
     {{ T.G.CLOSE | translate }}

@@ -187,8 +187,8 @@ const ea: ElectronAPI = {
 
   openPath: (path: string) => _send('OPEN_PATH', path),
   openExternalUrl: (url: string) => _send('OPEN_EXTERNAL', url),
-  saveFileDialog: (filename: string, data: string) =>
-    _invoke('SAVE_FILE_DIALOG', { filename, data }) as Promise<{
+  saveFileDialog: (filename, data, options) =>
+    _invoke('SAVE_FILE_DIALOG', { filename, data, options }) as Promise<{
       success: boolean;
       path?: string;
     }>,

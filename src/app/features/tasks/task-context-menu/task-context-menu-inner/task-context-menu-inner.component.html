@@ -182,6 +182,16 @@
   }
 
   <button
+    (click)="exportTask()"
+    mat-menu-item
+  >
+    <span class="menuItemLeft">
+      <mat-icon>download</mat-icon>
+      {{ T.F.TASK.EXPORT.ACTION | translate }}
+    </span>
+  </button>
+
+  <button
     #tagMenuTrigger="matMenuTrigger"
     [matMenuTriggerFor]="tagMenu"
     mat-menu-item

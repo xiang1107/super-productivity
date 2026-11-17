@@ -104,6 +104,7 @@ import { IssueSyncStateService } from '../../../issue/two-way-sync/issue-sync-st
 import { PlainspaceHandoffService } from '../../../issue/providers/plainspace/plainspace-handoff.service';
 import { PlainspaceMember } from '../../../issue/providers/plainspace/plainspace-api.service';
 import { DIALOG_AUTO_FOCUS_TYPING } from '../../../../util/dialog-auto-focus';
+import { TaskExportService } from '../../task-export.service';
 
 @Component({
   selector: 'task-context-menu-inner',
@@ -128,6 +129,7 @@ import { DIALOG_AUTO_FOCUS_TYPING } from '../../../../util/dialog-auto-focus';
   encapsulation: ViewEncapsulation.Emulated,
 })
 export class TaskContextMenuInnerComponent implements AfterViewInit, OnDestroy {
+  private readonly _taskExportService = inject(TaskExportService);
   private readonly _datePipe = inject(LocaleDatePipe);
   private readonly _taskService = inject(TaskService);
   private readonly _matDialog = inject(MatDialog);
@@ -626,6 +628,14 @@ export class TaskContextMenuInnerComponent implements AfterViewInit, OnDestroy {
       return;
     }
     this._taskDuplicateService.duplicate(taskWithSubtasks);
+  }
+
+  async exportTask(): Promise<void> {
+    const subTasks = this.task.subTaskIds.length
+      ? this._getTaskWithSubtasks().then((task) => task?.subTasks ?? [])
+      : [];
+    await this._taskExportService.exportTask(this.task, subTasks);
+    this.onClose();
   }
 
   moveToTop(): void {

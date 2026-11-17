@@ -1834,6 +1834,11 @@
       "ADD_TAG": "Add tag"
     },
     "TASK": {
+      "EXPORT": {
+        "ACTION": "Export task with notes",
+        "FAILED": "Could not export task notes. Please try again.",
+        "MISSING_IMAGES": "{{fileName}} exported, but {{count}} local image(s) could not be included."
+      },
       "ADD_TASK_BAR": {
         "ADD_BACK_VIEW_VALUES": "Add back",
         "ADD_EXISTING_TASK": "Add existing task \"{{taskTitle}}\"",
